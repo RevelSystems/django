@@ -170,7 +170,7 @@ class Command(BaseCommand):
         # to do at this point.
         emit_post_migrate_signal(created_models, self.verbosity, self.interactive, connection.alias)
 
-    def migration_progress_callback(self, action, migration, fake=False):
+    def migration_progress_callback(self, action, migration=None, fake=False):
         if self.verbosity >= 1:
             compute_time = self.verbosity > 1
             if action == "apply_start":

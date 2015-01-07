@@ -11,8 +11,8 @@ import warnings
 
 from django.core.validators import RegexValidator, EmailValidator
 from django.db import models, migrations
-from django.db.migrations.writer import MigrationWriter, SettingsReference
-from django.test import TestCase
+from django.db.migrations.writer import MigrationWriter, OperationWriter, SettingsReference
+from django.test import SimpleTestCase, TestCase, ignore_warnings
 from django.conf import settings
 from django.utils import datetime_safe, six
 from django.utils.deconstruct import deconstructible
@@ -33,7 +33,9 @@ class OperationWriterTests(SimpleTestCase):
 
     def test_empty_signature(self):
         operation = custom_migration_operations.operations.TestOperation()
-        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        writer = OperationWriter(operation)
+        writer.indentation = 0
+        buff, imports = writer.serialize()
         self.assertEqual(imports, {'import custom_migration_operations.operations'})
         self.assertEqual(
             buff,
@@ -43,7 +45,9 @@ class OperationWriterTests(SimpleTestCase):
 
     def test_args_signature(self):
         operation = custom_migration_operations.operations.ArgsOperation(1, 2)
-        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        writer = OperationWriter(operation)
+        writer.indentation = 0
+        buff, imports = writer.serialize()
         self.assertEqual(imports, {'import custom_migration_operations.operations'})
         self.assertEqual(
             buff,
@@ -55,7 +59,9 @@ class OperationWriterTests(SimpleTestCase):
 
     def test_kwargs_signature(self):
         operation = custom_migration_operations.operations.KwargsOperation(kwarg1=1)
-        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        writer = OperationWriter(operation)
+        writer.indentation = 0
+        buff, imports = writer.serialize()
         self.assertEqual(imports, {'import custom_migration_operations.operations'})
         self.assertEqual(
             buff,
@@ -66,7 +72,9 @@ class OperationWriterTests(SimpleTestCase):
 
     def test_args_kwargs_signature(self):
         operation = custom_migration_operations.operations.ArgsKwargsOperation(1, 2, kwarg2=4)
-        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        writer = OperationWriter(operation)
+        writer.indentation = 0
+        buff, imports = writer.serialize()
         self.assertEqual(imports, {'import custom_migration_operations.operations'})
         self.assertEqual(
             buff,
