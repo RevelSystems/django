@@ -29,6 +29,81 @@ class TestModel1(object):
     thing = models.FileField(upload_to=upload_to)
 
 
+class OperationWriterTests(SimpleTestCase):
+
+    def test_empty_signature(self):
+        operation = custom_migration_operations.operations.TestOperation()
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            'custom_migration_operations.operations.TestOperation(\n'
+            '),'
+        )
+
+    def test_args_signature(self):
+        operation = custom_migration_operations.operations.ArgsOperation(1, 2)
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            'custom_migration_operations.operations.ArgsOperation(\n'
+            '    arg1=1,\n'
+            '    arg2=2,\n'
+            '),'
+        )
+
+    def test_kwargs_signature(self):
+        operation = custom_migration_operations.operations.KwargsOperation(kwarg1=1)
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            'custom_migration_operations.operations.KwargsOperation(\n'
+            '    kwarg1=1,\n'
+            '),'
+        )
+
+    def test_args_kwargs_signature(self):
+        operation = custom_migration_operations.operations.ArgsKwargsOperation(1, 2, kwarg2=4)
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            'custom_migration_operations.operations.ArgsKwargsOperation(\n'
+            '    arg1=1,\n'
+            '    arg2=2,\n'
+            '    kwarg2=4,\n'
+            '),'
+        )
+
+    def test_multiline_args_signature(self):
+        operation = custom_migration_operations.operations.ArgsOperation("test\n    arg1", "test\narg2")
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            "custom_migration_operations.operations.ArgsOperation(\n"
+            "    arg1='test\\n    arg1',\n"
+            "    arg2='test\\narg2',\n"
+            "),"
+        )
+
+    def test_expand_args_signature(self):
+        operation = custom_migration_operations.operations.ExpandArgsOperation([1, 2])
+        buff, imports = OperationWriter(operation, indentation=0).serialize()
+        self.assertEqual(imports, {'import custom_migration_operations.operations'})
+        self.assertEqual(
+            buff,
+            'custom_migration_operations.operations.ExpandArgsOperation(\n'
+            '    arg=[\n'
+            '        1,\n'
+            '        2,\n'
+            '    ],\n'
+            '),'
+        )
+
+
 class WriterTests(TestCase):
     """
     Tests the migration writer (makes migration files from Migration instances)
@@ -81,6 +156,14 @@ class WriterTests(TestCase):
         self.assertSerializedEqual("föobár")
         string, imports = MigrationWriter.serialize("foobar")
         self.assertEqual(string, "'foobar'")
+
+    def test_serialize_multiline_strings(self):
+        self.assertSerializedEqual(b"foo\nbar")
+        string, imports = MigrationWriter.serialize(b"foo\nbar")
+        self.assertEqual(string, "b'foo\\nbar'")
+        self.assertSerializedEqual("föo\nbár")
+        string, imports = MigrationWriter.serialize("foo\nbar")
+        self.assertEqual(string, "'foo\\nbar'")
 
     def test_serialize_collections(self):
         self.assertSerializedEqual({1: 2})
