@@ -5,9 +5,11 @@ import copy
 from django.apps import AppConfig
 from django.apps.registry import Apps, apps as global_apps
 from django.db import models
-from django.db.models.options import DEFAULT_NAMES, normalize_together
-from django.db.models.fields.related import do_pending_lookups
 from django.db.models.fields.proxy import OrderWrt
+from django.db.models.fields.related import (
+    RECURSIVE_RELATIONSHIP_CONSTANT, do_pending_lookups,
+)
+from django.db.models.options import DEFAULT_NAMES, normalize_together
 from django.conf import settings
 from django.utils import six
 from django.utils.encoding import force_text, smart_text
@@ -25,6 +27,30 @@ def _get_app_label_and_model_name(model, app_label=''):
         return (tuple(split) if len(split) == 2 else (app_label, split[0]))
     else:
         return model._meta.app_label, model._meta.model_name
+
+
+def get_related_models_recursive(model):
+    """
+    Returns all models that have a direct or indirect relationship
+    to the given model.
+    """
+    def _related_models(m):
+        return [
+            f.model for f in m._meta.get_all_related_objects()
+        ] + [
+            subclass for subclass in m.__subclasses__()
+            if issubclass(subclass, models.Model)
+        ]
+
+    seen = set()
+    queue = _related_models(model)
+    for rel_mod in queue:
+        rel_app_label, rel_model_name = rel_mod._meta.app_label, rel_mod._meta.model_name
+        if (rel_app_label, rel_model_name) in seen:
+            continue
+        seen.add((rel_app_label, rel_model_name))
+        queue.extend(_related_models(rel_mod))
+    return seen - {(model._meta.app_label, model._meta.model_name)}
 
 
 class ProjectState(object):
@@ -53,79 +79,60 @@ class ProjectState(object):
 
     def reload_model(self, app_label, model_name):
         if 'apps' in self.__dict__:  # hasattr would cache the property
-            # print 'START RELOAD: %s.%s' % (app_label, model_name)
-            # Get relations before reloading the models, as _meta.apps may change
-            old_main_model = None
-            main_iden = (app_label, model_name)
             try:
-                old_main_model = self.apps.get_model(*main_iden)
-                related_old = {
-                    _get_app_label_and_model_name(f.model) for f in old_main_model._meta.get_all_related_objects()
-                }
+                old_model = self.apps.get_model(app_label, model_name)
             except LookupError:
-                related_old = set()
-            # print 'RELATED RELOAD LIST: %s' % related_old
-            old_related_m2m = set()
-            if old_main_model:
-                old_related_m2m = {_get_app_label_and_model_name(f.rel.to) for f, _ in old_main_model._meta.get_m2m_with_model()}
+                related_models = set()
+            else:
+                # Get all relations to and from the old model before reloading,
+                # as _meta.apps may change
+                related_models = get_related_models_recursive(old_model)
 
-            # reload root
-            self._reload_one_model(*main_iden)
+            # Get all outgoing references from the model to be rendered
+            model_state = self.models[(app_label, model_name)]
+            for name, field in model_state.fields:
+                if field.rel is not None:
+                    if field.rel.to == RECURSIVE_RELATIONSHIP_CONSTANT:
+                        continue
+                    rel_app_label, rel_model_name = _get_app_label_and_model_name(field.rel.to, app_label)
+                    new_model_iden = (rel_app_label, rel_model_name.lower())
+                    if new_model_iden == (app_label, model_name):
+                        continue
+                    related_models.add((rel_app_label, rel_model_name.lower()))
 
-            # Reload models if there are relations
-            model = self.apps.get_model(*main_iden)
-            related_m2m = {_get_app_label_and_model_name(f.rel.to) for f, _ in model._meta.get_m2m_with_model()}
-            # print 'M2M RELOAD LIST: %s' % related_m2m
-            for iden in related_old.union(related_m2m).union(old_related_m2m):
-                self._reload_and_fix_relations(*iden)
-            if related_m2m:
-                # Re-render this model after related models have been reloaded
-                self._reload_and_fix_relations(*main_iden)
+            # Unregister all related models
+            for rel_app_label, rel_model_name in related_models:
+                self.apps.unregister_model(rel_app_label, rel_model_name)
 
-    def _reload_and_fix_relations(self, app_label, model_name):
-        # TODO: relink caches in place
-        def clear_caches(model):
-            r_model_opts = model._meta
-            if hasattr(r_model_opts, '_related_many_to_many_cache'):
-                del r_model_opts._related_many_to_many_cache
-            if hasattr(r_model_opts, '_related_objects_cache'):
-                del r_model_opts._related_objects_cache
-            if hasattr(r_model_opts, '_related_objects_proxy_cache'):
-                del r_model_opts._related_objects_proxy_cache
-            if hasattr(r_model_opts, '_m2m_cache'):
-                del r_model_opts._m2m_cache
+            # Unregister the current model
+            self.apps.unregister_model(app_label, model_name)
 
-        # remember all existing relations
-        # reload the model (aka create new class from scratch)
-        # walk over every relation and correct model links
-        from itertools import chain
-        iden = (app_label, model_name)
-        old_model = self.apps.get_model(*iden)
-        # TODO: Dynamic reverse relation management, don't get over all models over and over again
-        c_old_relations = old_model._meta.get_all_related_objects_with_model(include_hidden=True)
-        c_old_m2m = old_model._meta.get_m2m_with_model()
-        c_old_m2m_relations = old_model._meta.get_all_related_m2m_objects_with_model()
-        clear_caches(old_model)
-        self._reload_one_model(*iden)
-        new_model = self.apps.get_model(*iden)
-        clear_caches(new_model)
-        # correct indirect relations
-        for r in set(chain((x for x, y in c_old_relations),
-                           (x.related for x, y in c_old_m2m),
-                           (x for x, y in c_old_m2m_relations))):
-            if hasattr(r.field, 'rel') and hasattr(r.field.rel, 'to') and r.field.rel.to is old_model:
-                r.field.rel.to = new_model
-            if hasattr(r.field, 'rel') and hasattr(r.field.rel, 'through') and r.field.rel.through is old_model:
-                r.field.rel.through = new_model
-            if hasattr(r, 'parent_model') and r.parent_model is old_model:
-                r.parent_model = new_model
-            if r.model is old_model:
-                r.model = new_model
+            # Gather all models states of those models that will be rerendered.
+            # This includes:
+            # 1. The current model
+            try:
+                model_state = self.models[app_label, model_name]
+            except KeyError:
+                states_to_be_rendered = []
+            else:
+                states_to_be_rendered = [model_state]
 
-    def _reload_one_model(self, app_label, model_name):
-        # print '_reload_one_model: %s.%s' % (app_label, model_name)
-        self.apps.unregister_model(app_label, model_name)
-        self.models[app_label, model_name].render(self.apps)
+            # 2. All related models of unmigrated apps
+            for model_state in self.apps.real_models:
+                if (model_state.app_label, model_state.name_lower) in related_models:
+                    states_to_be_rendered.append(model_state)
+
+            # 3. All related models of migrated apps
+            for rel_app_label, rel_model_name in related_models:
+                try:
+                    model_state = self.models[rel_app_label, rel_model_name]
+                except KeyError:
+                    pass
+                else:
+                    states_to_be_rendered.append(model_state)
+
+            # Render all models
+            self.apps.render_multiple(states_to_be_rendered)
 
     def clone(self):
         """Returns an exact copy of this ProjectState"""
@@ -133,11 +140,9 @@ class ProjectState(object):
             models={k: v.clone() for k, v in self.models.items()},
             real_apps=self.real_apps,
         )
+        if 'apps' in self.__dict__:
+            new_state.apps = self.apps.clone()
         return new_state
-        # FIXME: cloning apps mixes links in two states
-        ##if 'apps' in self.__dict__:
-        ##    new_state.apps = self.apps.clone()
-        ##return new_state
 
     @cached_property
     def apps(self):
@@ -194,21 +199,42 @@ class StateApps(Apps):
         # are some variables that refer to the Apps object.
         # FKs/M2Ms from real apps are also not included as they just
         # mess things up with partial states (due to lack of dependencies)
-        real_models = []
+        self.real_models = []
         for app_label in real_apps:
             app = global_apps.get_app_config(app_label)
             for model in app.get_models():
-                real_models.append(ModelState.from_model(model, exclude_rels=True))
+                self.real_models.append(ModelState.from_model(model, exclude_rels=True))
         # Populate the app registry with a stub for each application.
         app_labels = {model_state.app_label for model_state in models.values()}
         app_configs = [AppConfigStub(label) for label in sorted(real_apps + list(app_labels))]
         super(StateApps, self).__init__(app_configs)
 
+        self.render_multiple(list(models.values()) + self.real_models)
+
+        # If there are some lookups left, see if we can first resolve them
+        # ourselves - sometimes fields are added after class_prepared is sent
+        for lookup_model, operations in self._pending_lookups.items():
+            try:
+                model = self.get_model(lookup_model[0], lookup_model[1])
+            except LookupError:
+                app_label = "%s.%s" % (lookup_model[0], lookup_model[1])
+                if app_label == settings.AUTH_USER_MODEL and ignore_swappable:
+                    continue
+                # Raise an error with a best-effort helpful message
+                # (only for the first issue). Error message should look like:
+                # "ValueError: Lookup failed for model referenced by
+                # field migrations.Book.author: migrations.Author"
+                msg = "Lookup failed for model referenced by field {field}: {model[0]}.{model[1]}"
+                raise ValueError(msg.format(field=operations[0][1], model=lookup_model))
+            else:
+                do_pending_lookups(model)
+
+    def render_multiple(self, model_states):
         # We keep trying to render the models in a loop, ignoring invalid
         # base errors, until the size of the unrendered models doesn't
         # decrease by at least one, meaning there's a base dependency loop/
         # missing base.
-        unrendered_models = list(models.values()) + real_models
+        unrendered_models = model_states
         if not unrendered_models:
             return
         self.ready = False
@@ -231,24 +257,6 @@ class StateApps(Apps):
         self.ready = True
         self.clear_cache()
 
-        # If there are some lookups left, see if we can first resolve them
-        # ourselves - sometimes fields are added after class_prepared is sent
-        for lookup_model, operations in self._pending_lookups.items():
-            try:
-                model = self.get_model(lookup_model[0], lookup_model[1])
-            except LookupError:
-                app_label = "%s.%s" % (lookup_model[0], lookup_model[1])
-                if app_label == settings.AUTH_USER_MODEL and ignore_swappable:
-                    continue
-                # Raise an error with a best-effort helpful message
-                # (only for the first issue). Error message should look like:
-                # "ValueError: Lookup failed for model referenced by
-                # field migrations.Book.author: migrations.Author"
-                msg = "Lookup failed for model referenced by field {field}: {model[0]}.{model[1]}"
-                raise ValueError(msg.format(field=operations[0][1], model=lookup_model))
-            else:
-                do_pending_lookups(model)
-
     def clone(self):
         """
         Return a clone of this registry, mainly used by the migration framework.
@@ -256,6 +264,8 @@ class StateApps(Apps):
         clone = StateApps([], {})
         clone.all_models = copy.deepcopy(self.all_models)
         clone.app_configs = copy.deepcopy(self.app_configs)
+        # No need to actually clone them, they'll never change
+        clone.real_models = self.real_models
         return clone
 
     def register_model(self, app_label, model):
