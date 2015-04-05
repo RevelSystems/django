@@ -14,6 +14,7 @@ import types
 from django.apps import apps
 from django.db import models, migrations
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.operations.base import Operation
 from django.utils import datetime_safe, six
 from django.utils.encoding import force_text
 from django.utils.functional import Promise
@@ -364,6 +365,17 @@ class MigrationWriter(object):
                     return value.__name__, set()
                 else:
                     return "%s.%s" % (module, value.__name__), {"import %s" % module}
+        elif isinstance(value, models.manager.BaseManager):
+            as_manager, manager_path, qs_path, args, kwargs = value.deconstruct()
+            if as_manager:
+                name, imports = cls._serialize_path(qs_path)
+                return "%s.as_manager()" % name, imports
+            else:
+                return cls.serialize_deconstructed(manager_path, args, kwargs)
+        elif isinstance(value, Operation):
+            string, imports = OperationWriter(value, indentation=0).serialize()
+            # Nested operation, trailing comma is handled in upper OperationWriter._write()
+            return string.rstrip(','), imports
         # Anything that knows how to deconstruct itself.
         elif hasattr(value, 'deconstruct'):
             return cls.serialize_deconstructed(*value.deconstruct())
