@@ -160,7 +160,7 @@ class MigrationExecutor(object):
                     # main app cache, as it's not a direct dependency.
                     model = global_apps.get_model(model._meta.swapped)
                 if model._meta.db_table not in self.connection.introspection.table_names(self.connection.cursor()):
-                    return False
+                    return False, project_state
                 found_create_migration = True
         # If we get this far and we found at least one CreateModel migration,
         # the migration is considered implicitly applied.
