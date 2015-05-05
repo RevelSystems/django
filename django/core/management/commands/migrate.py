@@ -8,6 +8,7 @@ import time
 import traceback
 
 from django.apps import apps
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.core.management.color import no_style
@@ -149,15 +150,16 @@ class Command(BaseCommand):
         if not plan:
             if self.verbosity >= 1:
                 self.stdout.write("  No migrations to apply.")
-                # If there's changes that aren't in migrations yet, tell them how to fix it.
-                autodetector = MigrationAutodetector(
-                    executor.loader.project_state(),
-                    ProjectState.from_apps(apps),
-                )
-                changes = autodetector.changes(graph=executor.loader.graph)
-                if changes:
-                    self.stdout.write(self.style.NOTICE("  Your models have changes that are not yet reflected in a migration, and so won't be applied."))
-                    self.stdout.write(self.style.NOTICE("  Run 'manage.py makemigrations' to make new migrations, and then re-run 'manage.py migrate' to apply them."))
+                if settings.DEBUG:
+                    # If there's changes that aren't in migrations yet, tell them how to fix it.
+                    autodetector = MigrationAutodetector(
+                        executor.loader.project_state(),
+                        ProjectState.from_apps(apps),
+                    )
+                    changes = autodetector.changes(graph=executor.loader.graph)
+                    if changes:
+                        self.stdout.write(self.style.NOTICE("  Your models have changes that are not yet reflected in a migration, and so won't be applied."))
+                        self.stdout.write(self.style.NOTICE("  Run 'manage.py makemigrations' to make new migrations, and then re-run 'manage.py migrate' to apply them."))
         else:
             executor.migrate(targets, plan, fake=options.get("fake", False))
 
