@@ -34,8 +34,6 @@ class CreateModel(Operation):
             kwargs['options'] = self.options
         if self.bases and self.bases != (models.Model,):
             kwargs['bases'] = self.bases
-        if self.managers and self.managers != [('objects', models.Manager())]:
-            kwargs['managers'] = self.managers
         return (
             self.__class__.__name__,
             [],
