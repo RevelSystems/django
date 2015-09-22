@@ -48,11 +48,18 @@ class MigrationExecutor(object):
                     self.loader.graph.dependents.get(target, set())
                     if n[0] == target[0]
                 )
+                backwards = False
                 for node in next_in_app:
                     for migration in self.loader.graph.backwards_plan(node):
                         if migration in applied:
+                            backwards = True
                             plan.append((self.loader.graph.nodes[migration], True))
                             applied.remove(migration)
+                if not backwards:
+                    for migration in self.loader.graph.forwards_plan(target):
+                        if migration not in applied:
+                            plan.append((self.loader.graph.nodes[migration], False))
+                            applied.add(migration)
             else:
                 for migration in self.loader.graph.forwards_plan(target):
                     if migration not in applied:
@@ -66,25 +73,93 @@ class MigrationExecutor(object):
         """
         if plan is None:
             plan = self.migration_plan(targets)
-        migrations_to_run = {m[0] for m in plan}
         # Create the forwards plan Django would follow on an empty database
         full_plan = self.migration_plan(self.loader.graph.leaf_nodes(), clean_start=True)
         # Holds all states right before and right after a migration is applied
         # if the migration is being run.
+
+        all_forwards = all(not backwards for mig, backwards in plan)
+        all_backwards = all(backwards for mig, backwards in plan)
+
+        if not plan:
+            pass  # Nothing to do for an empty plan
+        elif all_forwards == all_backwards:
+            # This should only happen if there's a mixed plan
+            raise Exception(
+                "Migration plans with both forwards and backwards migrations "
+                "are not supported. Please split your migration process into "
+                "separate plans of only forwards OR backwards migrations."
+            )
+        elif all_forwards:
+            self._migrate_all_forwards(plan, full_plan, fake=fake)
+        else:
+            # No need to check for `elif all_backwards` here, as that condition
+            # would always evaluate to true.
+            self._migrate_all_backwards(plan, full_plan, fake=fake)
+
+    def _migrate_all_forwards(self, plan, full_plan, fake):
+        """
+        Take a list of 2-tuples of the form (migration instance, False) and
+        apply them in the order they occur in the full_plan.
+        """
+        state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
+        migrations_to_run = {m[0] for m in plan}
+        for migration, _ in full_plan:
+            if not migrations_to_run:
+                # We remove every migration that we applied from this set so
+                # that we can bail out once the last migration has been applied
+                # and don't always run until the very end of the migration
+                # process.
+                break
+            if migration in migrations_to_run:
+                if 'apps' not in state.__dict__:
+                    if self.progress_callback:
+                        self.progress_callback("render_start")
+                    state.apps  # Render all -- performance critical
+                    if self.progress_callback:
+                        self.progress_callback("render_success")
+                state = self.apply_migration(state, migration, fake=fake)
+                migrations_to_run.remove(migration)
+            else:
+                migration.mutate_state(state, preserve=False)
+
+    def _migrate_all_backwards(self, plan, full_plan, fake):
+        """
+        Take a list of 2-tuples of the form (migration instance, True) and
+        unapply them in reverse order they occur in the full_plan.
+        Since unapplying a migration requires the project state prior to that
+        migration, Django will compute the migration states before each of them
+        in a first run over the plan and then unapply them in a second run over
+        the plan.
+        """
+        migrations_to_run = {m[0] for m in plan}
+        # Holds all migration states prior to the migrations being unapplied
         states = {}
         state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
-        state.apps  # Render all real_apps -- performance critical
-        # Phase 1 -- Store all required states
+        if self.progress_callback:
+            self.progress_callback("render_start")
         for migration, _ in full_plan:
+            if not migrations_to_run:
+                # We remove every migration that we applied from this set so
+                # that we can bail out once the last migration has been applied
+                # and don't always run until the very end of the migration
+                # process.
+                break
             if migration in migrations_to_run:
-                states[migration] = state.clone()
-            state = migration.mutate_state(state)  # state is cloned inside
-        # Phase 2 -- Run the migrations
-        for migration, backwards in plan:
-            if not backwards:
-                self.apply_migration(states[migration], migration, fake=fake)
+                if 'apps' not in state.__dict__:
+                    state.apps  # Render all -- performance critical
+                # The state before this migration
+                states[migration] = state
+                # The old state keeps as-is, we continue with the new state
+                state = migration.mutate_state(state, preserve=True)
+                migrations_to_run.remove(migration)
             else:
-                self.unapply_migration(states[migration], migration, fake=fake)
+                migration.mutate_state(state, preserve=False)
+        if self.progress_callback:
+            self.progress_callback("render_success")
+
+        for migration, _ in plan:
+            self.unapply_migration(states[migration], migration, fake=fake)
 
     def collect_sql(self, plan):
         """
