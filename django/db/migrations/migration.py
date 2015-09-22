@@ -80,7 +80,7 @@ class Migration(object):
             operation.state_forwards(self.app_label, new_state)
         return new_state
 
-    def apply(self, project_state, schema_editor, collect_sql=False):
+    def apply(self, project_state, schema_editor, collect_sql=False, second_state=None):
         """
         Takes a project_state representing all migrations prior to this one
         and a schema_editor for a live database and applies the migration
@@ -89,6 +89,8 @@ class Migration(object):
         Returns the resulting project state for efficient re-use by following
         Migrations.
         """
+        if not second_state:
+            second_state = project_state.clone()
         for operation in self.operations:
             # If this operation cannot be represented as SQL, place a comment
             # there instead
@@ -99,18 +101,18 @@ class Migration(object):
                 schema_editor.collected_sql.append("-- %s" % operation.describe())
                 schema_editor.collected_sql.append("--")
                 continue
-            # Save the state before the operation has run
-            old_state = project_state.clone()
+
             operation.state_forwards(self.app_label, project_state)
             # Run the operation
             if not schema_editor.connection.features.can_rollback_ddl and operation.atomic:
                 # We're forcing a transaction on a non-transactional-DDL backend
                 with atomic(schema_editor.connection.alias):
-                    operation.database_forwards(self.app_label, schema_editor, old_state, project_state)
+                    operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
             else:
                 # Normal behaviour
-                operation.database_forwards(self.app_label, schema_editor, old_state, project_state)
-        return project_state
+                operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
+            operation.state_forwards(self.app_label, second_state)
+        return project_state, second_state
 
     def unapply(self, project_state, schema_editor, collect_sql=False):
         """

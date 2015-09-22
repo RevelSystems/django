@@ -103,6 +103,7 @@ class MigrationExecutor(object):
         apply them in the order they occur in the full_plan.
         """
         state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
+        second_state = None
         migrations_to_run = {m[0] for m in plan}
         for migration, _ in full_plan:
             if not migrations_to_run:
@@ -114,14 +115,22 @@ class MigrationExecutor(object):
             if migration in migrations_to_run:
                 if 'apps' not in state.__dict__:
                     if self.progress_callback:
-                        self.progress_callback("render_start")
+                        print "render_start"
                     state.apps  # Render all -- performance critical
                     if self.progress_callback:
-                        self.progress_callback("render_success")
-                state = self.apply_migration(state, migration, fake=fake)
+                        print "render_success"
+                if second_state and 'apps' not in second_state.__dict__:
+                    if self.progress_callback:
+                        print "render_start second"
+                    second_state.apps  # Render all -- performance critical
+                    if self.progress_callback:
+                        print "render_success second"
+                state, second_state = self.apply_migration(state, migration, fake=fake, second_state=second_state)
                 migrations_to_run.remove(migration)
             else:
                 migration.mutate_state(state, preserve=False)
+                if second_state:
+                    migration.mutate_state(second_state, preserve=False)
 
     def _migrate_all_backwards(self, plan, full_plan, fake):
         """
@@ -136,8 +145,6 @@ class MigrationExecutor(object):
         # Holds all migration states prior to the migrations being unapplied
         states = {}
         state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
-        if self.progress_callback:
-            self.progress_callback("render_start")
         for migration, _ in full_plan:
             if not migrations_to_run:
                 # We remove every migration that we applied from this set so
@@ -155,9 +162,6 @@ class MigrationExecutor(object):
                 migrations_to_run.remove(migration)
             else:
                 migration.mutate_state(state, preserve=False)
-        if self.progress_callback:
-            self.progress_callback("render_success")
-
         for migration, _ in plan:
             self.unapply_migration(states[migration], migration, fake=fake)
 
@@ -173,13 +177,13 @@ class MigrationExecutor(object):
                 if state is None:
                     state = self.loader.project_state((migration.app_label, migration.name), at_end=False)
                 if not backwards:
-                    state = migration.apply(state, schema_editor, collect_sql=True)
+                    state, _ = migration.apply(state, schema_editor, collect_sql=True)
                 else:
                     state = migration.unapply(state, schema_editor, collect_sql=True)
             statements.extend(schema_editor.collected_sql)
         return statements
 
-    def apply_migration(self, state, migration, fake=False):
+    def apply_migration(self, state, migration, fake=False, second_state=None):
         """
         Runs a migration forwards.
         """
@@ -190,10 +194,11 @@ class MigrationExecutor(object):
             applied, state = self.detect_soft_applied(state, migration)
             if applied:
                 fake = True
+                second_state = None
             else:
                 # Alright, do it normally
                 with self.connection.schema_editor() as schema_editor:
-                    state = migration.apply(state, schema_editor)
+                    state, second_state = migration.apply(state, schema_editor, second_state=second_state)
         # For replacement migrations, record individual statuses
         if migration.replaces:
             for app_label, name in migration.replaces:
@@ -203,7 +208,7 @@ class MigrationExecutor(object):
         # Report progress
         if self.progress_callback:
             self.progress_callback("apply_success", migration, fake)
-        return state
+        return state, second_state
 
     def unapply_migration(self, state, migration, fake=False):
         """
