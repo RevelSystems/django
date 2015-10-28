@@ -112,7 +112,37 @@ class DeleteModel(Operation):
         )
 
     def state_forwards(self, app_label, state):
+        apps = 'apps' in state.__dict__ and state.apps
+        if not apps:
+            state.remove_model(app_label, self.name_lower)
+            return
+        model = apps.get_model(app_label, self.name)
+        old_model_apps = model._meta.apps
+        model._meta.apps = apps
+        related_objects = model._meta.get_all_related_objects(include_hidden=True)
+        related_m2m_objects = model._meta.get_all_related_many_to_many_objects()
+        model._meta.apps = old_model_apps
+
         state.remove_model(app_label, self.name_lower)
+
+        # Remove the FKs and M2Ms pointing to us
+        for related_object in (related_objects + related_m2m_objects):
+            if related_object.field.rel.to is not model:
+                continue
+            if related_object.related_model == model:
+                related_key = (app_label, self.name)
+            else:
+                related_key = (
+                    related_object.related_model._meta.app_label,
+                    related_object.related_model._meta.model_name,
+                )
+            new_fields = []
+            for name, field in state.models[related_key].fields:
+                if name == related_object.field.name:
+                    continue
+                new_fields.append((name, field))
+            state.models[related_key].fields = new_fields
+            state.reload_model(*related_key)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         model = from_state.apps.get_model(app_label, self.name)

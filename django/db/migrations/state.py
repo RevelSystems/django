@@ -19,6 +19,14 @@ class InvalidBasesError(ValueError):
     pass
 
 
+def _get_app_label_and_model_name(model, app_label=''):
+    if isinstance(model, six.string_types):
+        split = model.split('.', 1)
+        return (tuple(split) if len(split) == 2 else (app_label, split[0]))
+    else:
+        return model._meta.app_label, model._meta.model_name
+
+
 class ProjectState(object):
     """
     Represents the entire project's overall state.
@@ -41,40 +49,92 @@ class ProjectState(object):
         del self.models[app_label, model_name]
         if 'apps' in self.__dict__:  # hasattr would cache the property
             self.apps.unregister_model(app_label, model_name)
+            self.apps.clear_cache()
 
     def reload_model(self, app_label, model_name):
         if 'apps' in self.__dict__:  # hasattr would cache the property
+            # print 'START RELOAD: %s.%s' % (app_label, model_name)
             # Get relations before reloading the models, as _meta.apps may change
+            old_main_model = None
+            main_iden = (app_label, model_name)
             try:
+                old_main_model = self.apps.get_model(*main_iden)
                 related_old = {
-                    f.model for f in
-                    self.apps.get_model(app_label, model_name)._meta.get_all_related_objects()
+                    _get_app_label_and_model_name(f.model) for f in old_main_model._meta.get_all_related_objects()
                 }
             except LookupError:
                 related_old = set()
-            self._reload_one_model(app_label, model_name)
+            # print 'RELATED RELOAD LIST: %s' % related_old
+            old_related_m2m = set()
+            if old_main_model:
+                old_related_m2m = {_get_app_label_and_model_name(f.rel.to) for f, _ in old_main_model._meta.get_m2m_with_model()}
+
+            # reload root
+            self._reload_one_model(*main_iden)
+
             # Reload models if there are relations
-            model = self.apps.get_model(app_label, model_name)
-            related_m2m = {f.rel.to for f, _ in model._meta.get_m2m_with_model()}
-            for rel_model in related_old.union(related_m2m):
-                self._reload_one_model(rel_model._meta.app_label, rel_model._meta.model_name)
+            model = self.apps.get_model(*main_iden)
+            related_m2m = {_get_app_label_and_model_name(f.rel.to) for f, _ in model._meta.get_m2m_with_model()}
+            # print 'M2M RELOAD LIST: %s' % related_m2m
+            for iden in related_old.union(related_m2m).union(old_related_m2m):
+                self._reload_and_fix_relations(*iden)
             if related_m2m:
                 # Re-render this model after related models have been reloaded
-                self._reload_one_model(app_label, model_name)
+                self._reload_and_fix_relations(*main_iden)
+
+    def _reload_and_fix_relations(self, app_label, model_name):
+        # remember all existing relations
+        # reload the model (aka create new class from scratch)
+        # walk over every relation and correct model links
+        from itertools import chain
+        iden = (app_label, model_name)
+        old_model = self.apps.get_model(*iden)
+        # TODO: Dynamic reverse relation management, don't get over all models over and over again
+        c_old_relations = old_model._meta.get_all_related_objects_with_model(include_hidden=True)
+        c_old_m2m = old_model._meta.get_m2m_with_model()
+        c_old_m2m_relations = old_model._meta.get_all_related_m2m_objects_with_model()
+        self._reload_one_model(*iden)
+        new_model = self.apps.get_model(*iden)
+        # correct indirect relations
+        for r in set(chain((x for x, y in c_old_relations),
+                           (x.related for x, y in c_old_m2m),
+                           (x for x, y in c_old_m2m_relations))):
+            if hasattr(r.field, 'rel') and hasattr(r.field.rel, 'to') and r.field.rel.to is old_model:
+                r.field.rel.to = new_model
+            if hasattr(r.field, 'rel') and hasattr(r.field.rel, 'through') and r.field.rel.through is old_model:
+                r.field.rel.through = new_model
+            if hasattr(r, 'parent_model') and r.parent_model is old_model:
+                r.parent_model = new_model
+            if r.model is old_model:
+                r.model = new_model
+
+            # TODO: relink caches in place
+            # r_model_opts = r.model._meta
+            # if hasattr(r_model_opts, '_related_many_to_many_cache'):
+            #     del r_model_opts._related_many_to_many_cache
+            # if hasattr(r_model_opts, '_related_objects_cache'):
+            #     del r_model_opts._related_objects_cache
+            # if hasattr(r_model_opts, '_related_objects_proxy_cache'):
+            #     del r_model_opts._related_objects_proxy_cache
+            # if hasattr(r_model_opts, '_m2m_cache'):
+            #     del r_model_opts._m2m_cache
 
     def _reload_one_model(self, app_label, model_name):
+        # print '_reload_one_model: %s.%s' % (app_label, model_name)
         self.apps.unregister_model(app_label, model_name)
         self.models[app_label, model_name].render(self.apps)
 
     def clone(self):
-        "Returns an exact copy of this ProjectState"
-        return ProjectState(
+        """Returns an exact copy of this ProjectState"""
+        new_state = ProjectState(
             models={k: v.clone() for k, v in self.models.items()},
             real_apps=self.real_apps,
         )
-        if 'apps' in self.__dict__:
-            new_state.apps = self.apps.clone()
         return new_state
+        # FIXME: cloning apps mixes links in two states
+        ##if 'apps' in self.__dict__:
+        ##    new_state.apps = self.apps.clone()
+        ##return new_state
 
     @cached_property
     def apps(self):
@@ -369,6 +429,7 @@ class ModelState(object):
     def render(self, apps):
         "Creates a Model object from our current state into the given apps"
         # First, make a Meta object
+        # print 'ModelState.render: %s.%s' % (self.app_label, self.name)
         meta_contents = {'app_label': self.app_label, "apps": apps}
         meta_contents.update(self.options)
         meta = type(str("Meta"), tuple(), meta_contents)

@@ -115,22 +115,30 @@ class MigrationExecutor(object):
             if migration in migrations_to_run:
                 if 'apps' not in state.__dict__:
                     if self.progress_callback:
-                        print "render_start"
+                        self.progress_callback("render_start", migration, False)
                     state.apps  # Render all -- performance critical
                     if self.progress_callback:
-                        print "render_success"
+                        self.progress_callback("render_end", migration, False)
                 if second_state and 'apps' not in second_state.__dict__:
                     if self.progress_callback:
-                        print "render_start second"
+                        self.progress_callback("render_start", migration, True)
                     second_state.apps  # Render all -- performance critical
                     if self.progress_callback:
-                        print "render_success second"
+                        self.progress_callback("render_end", migration, True)
                 state, second_state = self.apply_migration(state, migration, fake=fake, second_state=second_state)
                 migrations_to_run.remove(migration)
             else:
+                if self.progress_callback:
+                    self.progress_callback("mutating_start", migration, False)
                 migration.mutate_state(state, preserve=False)
+                if self.progress_callback:
+                    self.progress_callback("mutating_end", migration, False)
                 if second_state:
+                    if self.progress_callback:
+                        self.progress_callback("mutating_start", migration, True)
                     migration.mutate_state(second_state, preserve=False)
+                    if self.progress_callback:
+                        self.progress_callback("mutating_end", migration, True)
 
     def _migrate_all_backwards(self, plan, full_plan, fake):
         """
@@ -162,6 +170,7 @@ class MigrationExecutor(object):
                 migrations_to_run.remove(migration)
             else:
                 migration.mutate_state(state, preserve=False)
+                self.progress_callback("mutating_end", migration, fake)
         for migration, _ in plan:
             self.unapply_migration(states[migration], migration, fake=fake)
 

@@ -175,6 +175,17 @@ class Command(BaseCommand):
                     self.start = time.time()
                 self.stdout.write("  Applying %s..." % migration, ending="")
                 self.stdout.flush()
+            elif action in ("mutating_start", 'render_start') and self.verbosity >= 1:
+                self.start = time.time()
+                second = 'second' if fake else ''
+                if action == "mutating_start":
+                    self.stdout.write("  Mutating %s %s..." % (second, migration), ending="")
+                else:
+                    self.stdout.write("  Rendering %s apps %s..." % (second, migration), ending="")
+                self.stdout.flush()
+            elif action in ("mutating_end", 'render_end') and self.verbosity >= 1:
+                elapsed = " (%.3fs)" % (time.time() - self.start)
+                self.stdout.write(self.style.MIGRATE_SUCCESS(" OK" + elapsed))
             elif action == "apply_success":
                 elapsed = " (%.3fs)" % (time.time() - self.start) if compute_time else ""
                 if fake:

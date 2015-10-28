@@ -116,11 +116,16 @@ class RemoveField(Operation):
 
     def state_forwards(self, app_label, state):
         new_fields = []
+        old_field = None
         for name, instance in state.models[app_label, self.model_name_lower].fields:
             if name != self.name:
                 new_fields.append((name, instance))
+        if 'apps' in state.__dict__:
+            old_field = state.apps.get_model(app_label, self.model_name_lower)._meta.get_field(self.name)
         state.models[app_label, self.model_name_lower].fields = new_fields
         state.reload_model(app_label, self.model_name_lower)
+        if old_field and old_field.rel and not isinstance(old_field.rel.to, six.string_types):
+            state.reload_model(old_field.rel.to._meta.app_label, old_field.rel.to._meta.model_name)
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         from_model = from_state.apps.get_model(app_label, self.model_name)

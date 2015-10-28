@@ -267,10 +267,12 @@ class RelatedField(Field):
         other = self.rel.to
         if isinstance(other, six.string_types) or other._meta.pk is None:
             def resolve_related_class(field, model, cls):
+                # print 'resolve_related_class called, self = %s; other = %s; field = %s; model = %s (%s); class = %s ' % (self, other, field, model, id(model), cls)
                 field.rel.to = model
                 field.do_related_class(model, cls)
             add_lazy_relation(cls, self, other, resolve_related_class)
         else:
+            # print 'contribute_to_class only, self = %s; other = %s (%s); class = %s ' % (self, other, id(other), cls)
             self.do_related_class(other, cls)
 
     @property
@@ -1204,6 +1206,11 @@ class ForeignObjectRel(object):
         self.parent_link = parent_link
         self.on_delete = on_delete
 
+    # def __setattr__(self, name, value):
+    #     if name == "to":
+    #         print 'ForeignObjectRel set to = %s (%s);  field = %s, related_name = %s' % (value, id(value), self.field.__repr__(), getattr(self,'related_name', 'not found'))
+    #     super(ForeignObjectRel, self).__setattr__(name, value)
+
     def is_hidden(self):
         "Should the related object be hidden?"
         return self.related_name and self.related_name[-1] == '+'
@@ -1270,6 +1277,7 @@ class ManyToManyRel(object):
             raise ValueError("Can't supply a through model and db_constraint=False")
         if through_fields and not through:
             raise ValueError("Cannot specify through_fields without a through model")
+        # print 'ManyToManyRel instances with to = %s (%s);  related_name = %s' % (to, id(to), related_name)
         self.to = to
         self.related_name = related_name
         self.related_query_name = related_query_name
@@ -1281,6 +1289,11 @@ class ManyToManyRel(object):
         self.through = through
         self.through_fields = through_fields
         self.db_constraint = db_constraint
+    #
+    # def __setattr__(self, name, value):
+    #     if name == "to":
+    #         print 'ManyToManyRel set to = %s (%s);, related_name = %s' % (value, id(value), getattr(self,'related_name', 'not found'))
+    #     super(ManyToManyRel, self).__setattr__(name, value)
 
     def is_hidden(self):
         "Should the related object be hidden?"
