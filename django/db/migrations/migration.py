@@ -80,7 +80,7 @@ class Migration(object):
             operation.state_forwards(self.app_label, new_state)
         return new_state
 
-    def apply(self, project_state, schema_editor, collect_sql=False, second_state=None):
+    def apply(self, project_state, schema_editor, collect_sql=False, second_state=None, rerender=False):
         """
         Takes a project_state representing all migrations prior to this one
         and a schema_editor for a live database and applies the migration
@@ -111,7 +111,12 @@ class Migration(object):
             else:
                 # Normal behaviour
                 operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
-            operation.state_forwards(self.app_label, second_state)
+            if not rerender:
+                operation.state_forwards(self.app_label, second_state)
+            else:
+                # reset
+                second_state = None
+                project_state = project_state.clone()
         return project_state, second_state
 
     def unapply(self, project_state, schema_editor, collect_sql=False):

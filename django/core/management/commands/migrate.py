@@ -34,6 +34,8 @@ class Command(BaseCommand):
             help='Mark migrations as run without actually running them'),
         make_option('--list', '-l', action='store_true', dest='list', default=False,
             help='Show a list of all known migrations and which are applied'),
+        make_option('--render-tolerance', '-r', action='store', dest='render_tolerance', default=7,
+            help='Triggers rerender if more than `value` migrations have to be skipped'),
     )
 
     help = "Updates database schema. Manages both apps with migrations and those without."
@@ -42,6 +44,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
 
         self.verbosity = int(options.get('verbosity'))
+        self.render_tolerance = int(options.get('render_tolerance'))
         self.interactive = options.get('interactive')
         self.show_traceback = options.get('traceback')
         self.load_initial_data = options.get('load_initial_data')
@@ -62,7 +65,7 @@ class Command(BaseCommand):
             return self.show_migration_list(connection, args)
 
         # Work out which apps have migrations and which do not
-        executor = MigrationExecutor(connection, self.migration_progress_callback)
+        executor = MigrationExecutor(connection, self.migration_progress_callback, render_tolerance=self.render_tolerance)
 
         # Before anything else, see if there's conflicting apps and drop out
         # hard if there are any

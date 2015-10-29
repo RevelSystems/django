@@ -12,11 +12,12 @@ class MigrationExecutor(object):
     up or down to a specified set of targets.
     """
 
-    def __init__(self, connection, progress_callback=None):
+    def __init__(self, connection, progress_callback=None, render_tolerance=8):
         self.connection = connection
         self.loader = MigrationLoader(self.connection)
         self.recorder = MigrationRecorder(self.connection)
         self.progress_callback = progress_callback
+        self.render_tolerance = render_tolerance
 
     def migration_plan(self, targets, clean_start=False):
         """
@@ -105,6 +106,18 @@ class MigrationExecutor(object):
         state = ProjectState(real_apps=list(self.loader.unmigrated_apps))
         second_state = None
         migrations_to_run = {m[0] for m in plan}
+        # estimate how many migrations we have to run and determine render points
+        last_to_apply = None
+        applied_count = 0
+        for migration, _ in full_plan:
+            if migration in migrations_to_run:
+                last_to_apply = migration
+                applied_count = 0
+            else:
+                applied_count += 1
+                if applied_count > self.render_tolerance and last_to_apply:
+                    last_to_apply._trigger_rerender = True
+
         for migration, _ in full_plan:
             if not migrations_to_run:
                 # We remove every migration that we applied from this set so
@@ -125,7 +138,8 @@ class MigrationExecutor(object):
                     second_state.apps  # Render all -- performance critical
                     if self.progress_callback:
                         self.progress_callback("render_end", migration, True)
-                state, second_state = self.apply_migration(state, migration, fake=fake, second_state=second_state)
+                state, second_state = self.apply_migration(state, migration, fake=fake, second_state=second_state,
+                                                           rerender=hasattr(migration, '_trigger_rerender'))
                 migrations_to_run.remove(migration)
             else:
                 if self.progress_callback:
@@ -192,7 +206,7 @@ class MigrationExecutor(object):
             statements.extend(schema_editor.collected_sql)
         return statements
 
-    def apply_migration(self, state, migration, fake=False, second_state=None):
+    def apply_migration(self, state, migration, fake=False, second_state=None, rerender=False):
         """
         Runs a migration forwards.
         """
@@ -207,7 +221,8 @@ class MigrationExecutor(object):
             else:
                 # Alright, do it normally
                 with self.connection.schema_editor() as schema_editor:
-                    state, second_state = migration.apply(state, schema_editor, second_state=second_state)
+                    state, second_state = migration.apply(state, schema_editor, second_state=second_state,
+                                                          rerender=rerender)
         # For replacement migrations, record individual statuses
         if migration.replaces:
             for app_label, name in migration.replaces:
