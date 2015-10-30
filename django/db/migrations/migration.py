@@ -111,12 +111,11 @@ class Migration(object):
             else:
                 # Normal behaviour
                 operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
-            if not rerender:
-                operation.state_forwards(self.app_label, second_state)
-            else:
-                # reset
-                second_state = None
-                project_state = project_state.clone()
+            operation.state_forwards(self.app_label, second_state)
+        if rerender:
+            # reset
+            second_state = None
+            project_state = project_state.clone()
         return project_state, second_state
 
     def unapply(self, project_state, schema_editor, collect_sql=False):
