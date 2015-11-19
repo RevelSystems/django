@@ -142,7 +142,7 @@ def translation(language):
 
     from django.conf import settings
 
-    globalpath = os.path.join(os.path.dirname(upath(sys.modules[settings.__module__].__file__)), 'locale')
+    globalpath = settings.LOCALE_PATHS[0]
 
     def _fetch(lang, fallback=None):
 
