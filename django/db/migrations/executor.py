@@ -206,10 +206,19 @@ class MigrationExecutor(object):
             statements.extend(schema_editor.collected_sql)
         return statements
 
+    def record_migration(self, migration):
+        # For replacement migrations, record individual statuses
+        if migration.replaces:
+            for app_label, name in migration.replaces:
+                self.recorder.record_applied(app_label, name)
+        else:
+            self.recorder.record_applied(migration.app_label, migration.name)
+
     def apply_migration(self, state, migration, fake=False, second_state=None, rerender=False):
         """
         Runs a migration forwards.
         """
+        recorded = False
         if self.progress_callback:
             self.progress_callback("apply_start", migration, fake)
         if not fake:
@@ -223,12 +232,12 @@ class MigrationExecutor(object):
                 with self.connection.schema_editor() as schema_editor:
                     state, second_state = migration.apply(state, schema_editor, second_state=second_state,
                                                           rerender=rerender)
-        # For replacement migrations, record individual statuses
-        if migration.replaces:
-            for app_label, name in migration.replaces:
-                self.recorder.record_applied(app_label, name)
-        else:
-            self.recorder.record_applied(migration.app_label, migration.name)
+                    self.record_migration(migration)
+                    recorded = True
+
+        if not recorded:
+            self.record_migration(migration)
+            recorded = True
         # Report progress
         if self.progress_callback:
             self.progress_callback("apply_success", migration, fake)
