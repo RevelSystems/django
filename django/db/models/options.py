@@ -49,6 +49,10 @@ def normalize_together(option_together):
 
 @python_2_unicode_compatible
 class Options(object):
+    FORWARD_PROPERTIES = ('fields', 'many_to_many', 'concrete_fields',
+                          'local_concrete_fields', '_forward_fields_map')
+    REVERSE_PROPERTIES = ('related_objects', 'fields_map', '_relation_tree')
+
     def __init__(self, meta, app_label=None):
         self.local_fields = []
         self.local_many_to_many = []
@@ -562,6 +566,23 @@ class Options(object):
         except AttributeError:
             cache = self._fill_related_many_to_many_cache()
         return list(six.iteritems(cache))
+
+    def _expire_cache(self, forward=True, reverse=True):
+        # This method is usually called by apps.cache_clear(), when the
+        # registry is finalized, or when a new field is added.
+        properties_to_expire = []
+        if forward:
+            properties_to_expire.extend(self.FORWARD_PROPERTIES)
+            if reverse and not self.abstract:
+                properties_to_expire.extend(self.REVERSE_PROPERTIES)
+
+        for cache_key in properties_to_expire:
+            try:
+                delattr(self, cache_key)
+            except AttributeError:
+                pass
+
+        self._get_fields_cache = {}
 
     def _fill_related_many_to_many_cache(self):
         cache = OrderedDict()

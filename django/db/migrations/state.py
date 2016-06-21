@@ -206,6 +206,9 @@ class StateApps(Apps):
         # decrease by at least one, meaning there's a base dependency loop/
         # missing base.
         unrendered_models = list(models.values()) + real_models
+        if not unrendered_models:
+            return
+        self.ready = False
         while unrendered_models:
             new_unrendered_models = []
             for model in unrendered_models:
@@ -214,13 +217,16 @@ class StateApps(Apps):
                 except InvalidBasesError:
                     new_unrendered_models.append(model)
             if len(new_unrendered_models) == len(unrendered_models):
+                self.ready = True
                 raise InvalidBasesError(
                     "Cannot resolve bases for %r\nThis can happen if you are inheriting models from an "
                     "app with migrations (e.g. contrib.auth)\n in an app with no migrations; see "
-                    "https://docs.djangoproject.com/en/%s/topics/migrations/#dependencies "
-                    "for more" % (new_unrendered_models, get_docs_version())
+                    "https://docs.djangoproject.com/en/1.7/topics/migrations/#dependencies "
+                    "for more" % (new_unrendered_models)
                 )
             unrendered_models = new_unrendered_models
+        self.ready = True
+        self.clear_cache()
 
         # If there are some lookups left, see if we can first resolve them
         # ourselves - sometimes fields are added after class_prepared is sent
