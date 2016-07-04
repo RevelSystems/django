@@ -102,8 +102,8 @@ class StateTests(TestCase):
                 ("name", models.CharField(max_length=100)),
                 ("hidden", models.BooleanField()),
             ],
-            {},
-            None,
+            options={},
+            bases=None,
         ))
         project_state.add_model_state(ModelState(
             app_label="migrations",

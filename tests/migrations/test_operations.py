@@ -28,13 +28,13 @@ class OperationTestBase(MigrationTestBase):
         migration = Migration('name', app_label)
         migration.operations = operations
         with connection.schema_editor() as editor:
-            return migration.apply(project_state, editor)[0]
+            return migration.apply(project_state, editor)
 
     def unapply_operations(self, app_label, project_state, operations):
         migration = Migration('name', app_label)
         migration.operations = operations
         with connection.schema_editor() as editor:
-            return migration.unapply(project_state, editor)[0]
+            return migration.unapply(project_state, editor)
 
     def make_test_state(self, app_label, operation, **kwargs):
         """
@@ -1364,7 +1364,7 @@ class OperationTests(OperationTestBase):
         operation = migrations.RunPython(create_ponies)
         with connection.schema_editor() as editor:
             operation.database_forwards("test_runpython", editor, project_state, new_state)
-        self.assertEqual(project_state.render().get_model("test_runpython", "Pony").objects.count(), 4)
+        self.assertEqual(project_state.apps.get_model("test_runpython", "Pony").objects.count(), 4)
         # And deconstruction
         definition = operation.deconstruct()
         self.assertEqual(definition[0], "RunPython")
@@ -1421,7 +1421,7 @@ class OperationTests(OperationTestBase):
             with self.assertRaises(ValueError):
                 with connection.schema_editor() as editor:
                     non_atomic_migration.apply(project_state, editor)
-            self.assertEqual(project_state.render().get_model("test_runpythonatomic", "Pony").objects.count(), 1)
+            self.assertEqual(project_state.apps.get_model("test_runpythonatomic", "Pony").objects.count(), 1)
         # And deconstruction
         definition = non_atomic_migration.operations[0].deconstruct()
         self.assertEqual(definition[0], "RunPython")

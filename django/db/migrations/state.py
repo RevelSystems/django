@@ -83,6 +83,18 @@ class ProjectState(object):
                 self._reload_and_fix_relations(*main_iden)
 
     def _reload_and_fix_relations(self, app_label, model_name):
+        # TODO: relink caches in place
+        def clear_caches(model):
+            r_model_opts = model._meta
+            if hasattr(r_model_opts, '_related_many_to_many_cache'):
+                del r_model_opts._related_many_to_many_cache
+            if hasattr(r_model_opts, '_related_objects_cache'):
+                del r_model_opts._related_objects_cache
+            if hasattr(r_model_opts, '_related_objects_proxy_cache'):
+                del r_model_opts._related_objects_proxy_cache
+            if hasattr(r_model_opts, '_m2m_cache'):
+                del r_model_opts._m2m_cache
+
         # remember all existing relations
         # reload the model (aka create new class from scratch)
         # walk over every relation and correct model links
@@ -93,8 +105,10 @@ class ProjectState(object):
         c_old_relations = old_model._meta.get_all_related_objects_with_model(include_hidden=True)
         c_old_m2m = old_model._meta.get_m2m_with_model()
         c_old_m2m_relations = old_model._meta.get_all_related_m2m_objects_with_model()
+        clear_caches(old_model)
         self._reload_one_model(*iden)
         new_model = self.apps.get_model(*iden)
+        clear_caches(new_model)
         # correct indirect relations
         for r in set(chain((x for x, y in c_old_relations),
                            (x.related for x, y in c_old_m2m),
@@ -107,17 +121,6 @@ class ProjectState(object):
                 r.parent_model = new_model
             if r.model is old_model:
                 r.model = new_model
-
-            # TODO: relink caches in place
-            # r_model_opts = r.model._meta
-            # if hasattr(r_model_opts, '_related_many_to_many_cache'):
-            #     del r_model_opts._related_many_to_many_cache
-            # if hasattr(r_model_opts, '_related_objects_cache'):
-            #     del r_model_opts._related_objects_cache
-            # if hasattr(r_model_opts, '_related_objects_proxy_cache'):
-            #     del r_model_opts._related_objects_proxy_cache
-            # if hasattr(r_model_opts, '_m2m_cache'):
-            #     del r_model_opts._m2m_cache
 
     def _reload_one_model(self, app_label, model_name):
         # print '_reload_one_model: %s.%s' % (app_label, model_name)

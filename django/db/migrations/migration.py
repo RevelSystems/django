@@ -1,7 +1,10 @@
 from __future__ import unicode_literals
+
 from django.db.transaction import atomic
+from django.utils.encoding import python_2_unicode_compatible
 
 
+@python_2_unicode_compatible
 class Migration(object):
     """
     The base class for all migrations.
@@ -36,9 +39,16 @@ class Migration(object):
     # are not applied.
     replaces = []
 
-    # Error class which is raised when a migration is irreversible
-    class IrreversibleError(RuntimeError):
-        pass
+    # Is this an initial migration? Initial migrations are skipped on
+    # --fake-initial if the table or fields already exist. If None, check if
+    # the migration has any dependencies to determine if there are dependencies
+    # to tell if db introspection needs to be done. If True, always perform
+    # introspection. If False, never perform introspection.
+    initial = None
+
+    # Whether to wrap the whole migration in a transaction. Only has an effect
+    # on database backends which support transactional DDL.
+    atomic = True
 
     def __init__(self, name, app_label):
         self.name = name
@@ -80,7 +90,7 @@ class Migration(object):
             operation.state_forwards(self.app_label, new_state)
         return new_state
 
-    def apply(self, project_state, schema_editor, collect_sql=False, second_state=None, rerender=False):
+    def apply(self, project_state, schema_editor, collect_sql=False):
         """
         Takes a project_state representing all migrations prior to this one
         and a schema_editor for a live database and applies the migration
@@ -89,34 +99,32 @@ class Migration(object):
         Returns the resulting project state for efficient re-use by following
         Migrations.
         """
-        if not second_state:
-            second_state = project_state.clone()
         for operation in self.operations:
             # If this operation cannot be represented as SQL, place a comment
             # there instead
-            if collect_sql and not operation.reduces_to_sql:
+            if collect_sql:
                 schema_editor.collected_sql.append("--")
-                schema_editor.collected_sql.append("-- MIGRATION NOW PERFORMS OPERATION THAT CANNOT BE "
-                                                   "WRITTEN AS SQL:")
+                if not operation.reduces_to_sql:
+                    schema_editor.collected_sql.append(
+                        "-- MIGRATION NOW PERFORMS OPERATION THAT CANNOT BE WRITTEN AS SQL:"
+                    )
                 schema_editor.collected_sql.append("-- %s" % operation.describe())
                 schema_editor.collected_sql.append("--")
-                continue
-
+                if not operation.reduces_to_sql:
+                    continue
+            # Save the state before the operation has run
+            old_state = project_state.clone()
             operation.state_forwards(self.app_label, project_state)
             # Run the operation
             if not schema_editor.connection.features.can_rollback_ddl and operation.atomic:
-                # We're forcing a transaction on a non-transactional-DDL backend
+                # Force a transaction on a non-transactional-DDL backend or an
+                # atomic operation inside a non-atomic migration.
                 with atomic(schema_editor.connection.alias):
-                    operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
+                    operation.database_forwards(self.app_label, schema_editor, old_state, project_state)
             else:
                 # Normal behaviour
-                operation.database_forwards(self.app_label, schema_editor, second_state, project_state)
-            operation.state_forwards(self.app_label, second_state)
-        if rerender:
-            # reset
-            second_state = None
-            project_state = project_state.clone()
-        return project_state, second_state
+                operation.database_forwards(self.app_label, schema_editor, old_state, project_state)
+        return project_state
 
     def unapply(self, project_state, schema_editor, collect_sql=False):
         """
@@ -139,20 +147,24 @@ class Migration(object):
             # If it's irreversible, error out
             if not operation.reversible:
                 raise Migration.IrreversibleError("Operation %s in %s is not reversible" % (operation, self))
-            new_state = project_state.clone()
+            # Preserve new state from previous run to not tamper the same state
+            # over all operations
+            new_state = new_state.clone()
+            old_state = new_state.clone()
             operation.state_forwards(self.app_label, new_state)
-            to_run.append((operation, project_state, new_state))
-            project_state = new_state
-        # Now run them in reverse
-        to_run.reverse()
+            to_run.insert(0, (operation, old_state, new_state))
+
+        # Phase 2
         for operation, to_state, from_state in to_run:
             if collect_sql:
+                schema_editor.collected_sql.append("--")
                 if not operation.reduces_to_sql:
-                    schema_editor.collected_sql.append("--")
-                    schema_editor.collected_sql.append("-- MIGRATION NOW PERFORMS OPERATION THAT CANNOT BE "
-                                                       "WRITTEN AS SQL:")
-                    schema_editor.collected_sql.append("-- %s" % operation.describe())
-                    schema_editor.collected_sql.append("--")
+                    schema_editor.collected_sql.append(
+                        "-- MIGRATION NOW PERFORMS OPERATION THAT CANNOT BE WRITTEN AS SQL:"
+                    )
+                schema_editor.collected_sql.append("-- %s" % operation.describe())
+                schema_editor.collected_sql.append("--")
+                if not operation.reduces_to_sql:
                     continue
             if not schema_editor.connection.features.can_rollback_ddl and operation.atomic:
                 # We're forcing a transaction on a non-transactional-DDL backend
@@ -162,6 +174,9 @@ class Migration(object):
                 # Normal behaviour
                 operation.database_backwards(self.app_label, schema_editor, from_state, to_state)
         return project_state
+
+    class IrreversibleError(Exception):
+        pass
 
 
 class SwappableTuple(tuple):

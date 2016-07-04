@@ -129,12 +129,12 @@ class DeleteModel(Operation):
         for related_object in (related_objects + related_m2m_objects):
             if related_object.field.rel.to is not model:
                 continue
-            if related_object.related_model == model:
+            if related_object.model == model:
                 related_key = (app_label, self.name)
             else:
                 related_key = (
-                    related_object.related_model._meta.app_label,
-                    related_object.related_model._meta.model_name,
+                    related_object.model._meta.app_label,
+                    related_object.model._meta.model_name,
                 )
             new_fields = []
             for name, field in state.models[related_key].fields:
@@ -207,12 +207,12 @@ class RenameModel(Operation):
                 # directly. Rather, a superclass does.
                 continue
             # Use the new related key for self referential related objects.
-            if related_object.related_model == model:
+            if related_object.model == model:
                 related_key = (app_label, self.new_name_lower)
             else:
                 related_key = (
-                    related_object.related_model._meta.app_label,
-                    related_object.related_model._meta.model_name,
+                    related_object.model._meta.app_label,
+                    related_object.model._meta.model_name,
                 )
             new_fields = []
             for name, field in state.models[related_key].fields:
@@ -244,8 +244,8 @@ class RenameModel(Operation):
                 else:
                     model = related_object.model
                     related_key = (
-                        related_object.related_model._meta.app_label,
-                        related_object.related_model._meta.model_name,
+                        related_object.model._meta.app_label,
+                        related_object.model._meta.model_name,
                     )
                 to_field = to_state.apps.get_model(
                     *related_key
