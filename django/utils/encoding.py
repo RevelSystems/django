@@ -155,8 +155,6 @@ def force_bytes(s, encoding='utf-8', strings_only=False, errors='strict'):
 if six.PY3:
     smart_str = smart_text
     force_str = force_text
-    #backward compatibility for python2 libraries
-    smart_unicode = smart_text
 else:
     smart_str = smart_bytes
     force_str = force_bytes
