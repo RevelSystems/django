@@ -379,6 +379,9 @@ class Model(six.with_metaclass(ModelBase)):
             # is *not* consumed. We rely on this, so don't change the order
             # without changing the logic.
             for val, field in zip(args, fields_iter):
+                print ('val',val)
+                print ('field', field)
+                print ('field.attname', field.attname)
                 setattr(self, field.attname, val)
         else:
             # Slower, kwargs-ready version.
