@@ -220,6 +220,10 @@ class DatabaseOperations(BaseDatabaseOperations):
     def return_insert_id(self):
         return "RETURNING %s", ()
 
-    def bulk_insert_sql(self, fields, num_values):
+    def bulk_insert_sql(self, fields, num_values, placeholder_rows=None):
+        if placeholder_rows is not None:
+            placeholder_rows_sql = (", ".join(row) for row in placeholder_rows)
+            values_sql = ", ".join("(%s)" % sql for sql in placeholder_rows_sql)
+            return "VALUES " + values_sql
         items_sql = "(%s)" % ", ".join(["%s"] * len(fields))
         return "VALUES " + ", ".join([items_sql] * num_values)

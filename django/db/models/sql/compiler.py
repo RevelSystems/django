@@ -1,4 +1,5 @@
 import datetime
+from itertools import chain
 
 from django.conf import settings
 from django.core.exceptions import FieldError
@@ -857,6 +858,71 @@ class SQLInsertCompiler(SQLCompiler):
             # Return the common case for the placeholder
             return '%s'
 
+    def field_as_sql(self, field, val):
+        """
+        Take a field and a value intended to be saved on that field, and
+        return placeholder SQL and accompanying params. Check for raw values,
+        expressions, and fields with get_placeholder() defined in that order.
+        When field is None, consider the value raw and use it as the
+        placeholder, with no corresponding parameters returned.
+        """
+        if field is None:
+            # A field value of None means the value is raw.
+            sql, params = val, []
+        elif hasattr(val, 'as_sql'):
+            # This is an expression, let's compile it.
+            sql, params = self.compile(val)
+        elif hasattr(field, 'get_placeholder'):
+            # Some fields (e.g. geo fields) need special munging before
+            # they can be inserted.
+            sql, params = field.get_placeholder(val, self, self.connection), [val]
+        else:
+            # Return the common case for the placeholder
+            sql, params = '%s', [val]
+
+        # The following hook is only used by Oracle Spatial, which sometimes
+        # needs to yield 'NULL' and [] as its placeholder and params instead
+        # of '%s' and [None]. The 'NULL' placeholder is produced earlier by
+        # OracleOperations.get_geom_placeholder(). The following line removes
+        # the corresponding None parameter. See ticket #10888.
+        params = self.connection.ops.modify_insert_params(sql, params)
+
+        return sql, params
+
+    def assemble_as_sql(self, fields, value_rows):
+        """
+        Take a sequence of N fields and a sequence of M rows of values, and
+        generate placeholder SQL and parameters for each field and value.
+        Return a pair containing:
+         * a sequence of M rows of N SQL placeholder strings, and
+         * a sequence of M rows of corresponding parameter values.
+        Each placeholder string may contain any number of '%s' interpolation
+        strings, and each parameter row will contain exactly as many params
+        as the total number of '%s's in the corresponding placeholder row.
+        """
+        if not value_rows:
+            return [], []
+
+        # list of (sql, [params]) tuples for each object to be saved
+        # Shape: [n_objs][n_fields][2]
+        rows_of_fields_as_sql = (
+            (self.field_as_sql(field, v) for field, v in zip(fields, row))
+            for row in value_rows
+        )
+
+        # tuple like ([sqls], [[params]s]) for each object to be saved
+        # Shape: [n_objs][2][n_fields]
+        sql_and_param_pair_rows = (zip(*row) for row in rows_of_fields_as_sql)
+
+        # Extract separate lists for placeholders and params.
+        # Each of these has shape [n_objs][n_fields]
+        placeholder_rows, param_rows = zip(*sql_and_param_pair_rows)
+
+        # Params for each field are still lists, and need to be flattened.
+        param_rows = [[p for ps in row for p in ps] for row in param_rows]
+
+        return placeholder_rows, param_rows
+
     def as_sql(self):
         # We don't need quote_name_unless_alias() here, since these are all
         # going to be column names (so we can avoid the extra overhead).
@@ -896,13 +962,16 @@ class SQLInsertCompiler(SQLCompiler):
             # Oracle Spatial needs to remove some values due to #10888
             params = self.connection.ops.modify_insert_params(placeholders, params)
         if can_bulk_and_return_ids:
-            result.append(self.connection.ops.bulk_insert_sql(fields, len(values)))
+            placeholder_rows, param_rows = self.assemble_as_sql(fields, values)
+
+            result.append(self.connection.ops.bulk_insert_sql(fields, None, placeholder_rows=placeholder_rows))
+            params = param_rows
+            col = "%s.%s" % (qn(opts.db_table), qn(opts.pk.column))
             r_fmt, r_params = self.connection.ops.return_insert_id()
             if r_fmt:
-                col = "%s.%s" % (qn(opts.db_table), qn(opts.pk.column))
                 result.append(r_fmt % col)
                 params += r_params
-            return [(" ".join(result), tuple([v for val in values for v in val]))]
+            return [(" ".join(result), tuple(chain.from_iterable(params)))]
         elif self.return_id and self.connection.features.can_return_id_from_insert:
             params = params[0]
             col = "%s.%s" % (qn(opts.db_table), qn(opts.pk.column))
